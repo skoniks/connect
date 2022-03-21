@@ -10,7 +10,7 @@ readline.prompt(true);
 const logger = createLogger('Main', true);
 logger('client starting');
 setImmediate(async () => {
-  const upnp = await UPNP.create();
+  const upnp = await UPNP.create(true, 0);
   const { address } = upnp.gateway;
   const external = await upnp.externalIp();
   logger('external ip %s', external);

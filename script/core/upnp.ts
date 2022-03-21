@@ -42,13 +42,23 @@ const logger = createLogger('UPnP', true);
 
 export class UPNP {
   public gateway: Gateway;
+  private refresh: boolean;
+  private ttl: number;
   private service?: {
     serviceType: string;
     controlURL: string;
   };
+  private ports: {
+    [port: number]: {
+      protocol: 'TCP' | 'UDP';
+      interval?: NodeJS.Timer;
+    };
+  } = {};
 
-  constructor(gateway: Gateway) {
+  constructor(gateway: Gateway, refresh: boolean, ttl: number) {
     this.gateway = gateway;
+    this.refresh = refresh;
+    this.ttl = Math.max(ttl, 1200);
   }
 
   static findGateway(timeout = 1800) {
@@ -239,8 +249,9 @@ export class UPNP {
   public async portMapping(
     port: number,
     protocol: 'TCP' | 'UDP' = 'TCP',
-    ttl = 1200,
+    ttl = this.ttl,
   ) {
+    ttl = Math.max(ttl, 1200);
     const description = 'Connect UPMP';
     await this.run('AddPortMapping', {
       NewRemoteHost: '',
@@ -252,14 +263,21 @@ export class UPNP {
       NewPortMappingDescription: description,
       NewLeaseDuration: ttl,
     });
+    this.ports[port] = { protocol };
+    if (this.refresh) {
+      this.ports[port].interval = setInterval(() => {
+        this.portMapping(port, protocol, ttl);
+      }, (ttl - 600) * 1000);
+    }
   }
 
   public async portUnmapping(port: number, protocol: 'TCP' | 'UDP' = 'TCP') {
-    return await this.run('DeletePortMapping', {
+    await this.run('DeletePortMapping', {
       NewRemoteHost: '',
       NewExternalPort: port,
       NewProtocol: protocol,
     });
+    delete this.ports[port];
   }
 
   public async getMappings() {
@@ -279,12 +297,18 @@ export class UPNP {
     return mappings;
   }
 
-  static async create() {
+  static async create(refresh = true, ttl = 7200) {
+    logger('refresh: %o, ttl: %d', refresh, ttl);
     const gateway = await UPNP.findGateway();
-    return new UPNP(gateway);
+    return new UPNP(gateway, refresh, ttl);
   }
 
   public async destroy() {
-    // TODO: portUnmappings
+    for (const port in this.ports) {
+      const { protocol, interval } = this.ports[port];
+      if (interval) clearInterval(interval);
+      await this.portUnmapping(Number(port), protocol);
+      delete this.ports[port];
+    }
   }
 }
