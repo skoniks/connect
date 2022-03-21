@@ -42,7 +42,7 @@ export const createLogger = (namespace: string | Debugger, prompt = false) => {
     !prompt || readline.prompt(true);
   };
   Object.assign(caller, logger);
-  return caller as Debugger;
+  return <Debugger>caller;
 };
 
 export const extendLogger = (

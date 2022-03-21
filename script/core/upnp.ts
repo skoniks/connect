@@ -12,8 +12,6 @@ const SERVICES = [
   'urn:schemas-upnp-org:service:WANPPPConnection:1',
 ];
 
-const logger = createLogger('UPNP', true);
-
 type Gateway = {
   location: string;
   address: string;
@@ -29,15 +27,31 @@ type Device = {
   deviceList?: { device?: Device };
   serviceList?: { service?: Service };
 };
+type Mapping = {
+  NewRemoteHost: string;
+  NewExternalPort: number;
+  NewProtocol: 'TCP' | 'UDP';
+  NewInternalPort: number;
+  NewInternalClient: string;
+  NewEnabled: number;
+  NewPortMappingDescription: string;
+  NewLeaseDuration: number;
+};
+
+const logger = createLogger('UPnP', true);
 
 export class UPNP {
-  private gateway!: Gateway;
+  public gateway: Gateway;
+  private service?: {
+    serviceType: string;
+    controlURL: string;
+  };
 
-  constructor() {
-    //
+  constructor(gateway: Gateway) {
+    this.gateway = gateway;
   }
 
-  public findGateway(timeout = 1800) {
+  static findGateway(timeout = 1800) {
     return new Promise((resolve: (gateway: Gateway) => void, reject) => {
       logger('searching gateway');
       const timedout = false;
@@ -81,7 +95,7 @@ export class UPNP {
                 const match = line.match(/^([^:]*)\s*:\s*(.*)$/);
                 if (match) headers[match[1].toLowerCase()] = match[2];
                 return headers;
-              }, {} as { [key: string]: string });
+              }, <{ [key: string]: string }>{});
             if (!headers.st || !headers.location) {
               reject('Invalid response');
               return;
@@ -129,7 +143,7 @@ export class UPNP {
     const parser = new XMLParser({ ignoreDeclaration: true });
     const device = parser.parse(data).root.device;
     logger('device %s', device.deviceType);
-    return device as Device;
+    return <Device>device;
   }
 
   private parseDevice(device: Device) {
@@ -177,30 +191,29 @@ export class UPNP {
   }
 
   private async run(action: string, args: { [key: string]: unknown }) {
+    if (!this.service) this.service = await this.getService();
     logger('action %s', action);
-    if (!this.gateway) this.gateway = await this.findGateway();
-    const service = await this.getService();
     const body = [
       '<?xml version="1.0"?>',
       '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" ',
       's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">',
       '<s:Body>',
-      `<u:${action} xmlns:u=${JSON.stringify(service.serviceType)}>`,
+      `<u:${action} xmlns:u=${JSON.stringify(this.service.serviceType)}>`,
       ...Object.entries(args).map(([key, value]) => {
-        return `<${key}>${value || ''}</${key}>`;
+        return `<${key}>${typeof value === 'undefined' ? '' : value}</${key}>`;
       }),
       `</u:${action}>`,
       '</s:Body>',
       '</s:Envelope>',
     ].join('');
     const { data: soap } = await request(
-      service.controlURL,
+      this.service.controlURL,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'text/xml; charset="utf-8"',
           'Content-Length': Buffer.byteLength(body),
-          SOAPAction: JSON.stringify(service.serviceType + '#' + action),
+          SOAPAction: JSON.stringify(this.service.serviceType + '#' + action),
         },
       },
       body,
@@ -208,12 +221,13 @@ export class UPNP {
     const parser = new XMLParser({ removeNSPrefix: true });
     const data = parser.parse(soap)['Envelope']['Body'];
     if (data['Fault']) {
+      logger('fault %s', action);
       const key = data['Fault']['faultstring'];
       const error = data['Fault']['detail'][key];
       throw new Error(error.errorDescription);
     }
     logger('result %s', action);
-    // console.log(JSON.stringify(data, null, 4));
+    // logger('result json %s', JSON.stringify(data, null, 4));
     return data[`${action}Response`];
   }
 
@@ -227,7 +241,6 @@ export class UPNP {
     protocol: 'TCP' | 'UDP' = 'TCP',
     ttl = 1200,
   ) {
-    if (!this.gateway) this.gateway = await this.findGateway();
     const description = 'Connect UPMP';
     await this.run('AddPortMapping', {
       NewRemoteHost: '',
@@ -242,11 +255,36 @@ export class UPNP {
   }
 
   public async portUnmapping(port: number, protocol: 'TCP' | 'UDP' = 'TCP') {
-    if (!this.gateway) this.gateway = await this.findGateway();
     return await this.run('DeletePortMapping', {
       NewRemoteHost: '',
       NewExternalPort: port,
       NewProtocol: protocol,
     });
+  }
+
+  public async getMappings() {
+    let index = 0;
+    let end = false;
+    const mappings: Mapping[] = [];
+    do {
+      try {
+        const mapping = await this.run('GetGenericPortMappingEntry', {
+          NewPortMappingIndex: index++,
+        });
+        mappings.push(mapping);
+      } catch (error) {
+        end = index !== 1;
+      }
+    } while (!end);
+    return mappings;
+  }
+
+  static async create() {
+    const gateway = await UPNP.findGateway();
+    return new UPNP(gateway);
+  }
+
+  public async destroy() {
+    // TODO: portUnmappings
   }
 }
