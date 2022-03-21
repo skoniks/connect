@@ -2,9 +2,18 @@ import debug, { Debugger } from 'debug';
 import { ec } from 'elliptic';
 import { IncomingMessage, request as http, RequestOptions } from 'http';
 import { stdin as input, stdout as output } from 'process';
-import { clearLine, createInterface, cursorTo } from 'readline';
+import {
+  clearLine,
+  clearScreenDown,
+  createInterface,
+  cursorTo,
+} from 'readline';
 
-export const readline = createInterface({ input, output });
+export const readline = createInterface({ input, output, terminal: true });
+export const clearScreen = (prompt = false) => {
+  cursorTo(output, 0, 0) && clearScreenDown(output);
+  !prompt || readline.prompt(true);
+};
 export const question = (question: string) =>
   new Promise((callback: (answer: string) => void) => {
     readline.question(question, (answer: string) => {

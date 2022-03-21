@@ -1,6 +1,6 @@
 import debug from 'debug';
 import { config } from 'dotenv';
-import { CoreServer } from './core/server';
+import { Client } from './core/client';
 import { UPNP } from './core/upnp';
 import { createLogger, readline } from './utils';
 
@@ -8,19 +8,19 @@ config() && debug.enable('*');
 readline.prompt(true);
 
 const logger = createLogger('Main', true);
-logger('client starting');
+logger('app starting');
 setImmediate(async () => {
   const upnp = await UPNP.create(true, 0);
   const { address } = upnp.gateway;
-  const external = await upnp.externalIp();
-  logger('external ip %s', external);
-
-  const server = new CoreServer();
-  const { port } = await server.listen(address);
+  const ip = await upnp.externalIp();
+  logger('external ip %s', ip);
+  const client = new Client(ip);
+  const { port } = await client.listen(address);
   await upnp.portMapping(port, 'TCP');
   logger('port %d mapped', port);
+  client.startInterface();
 });
 
 process.on('exit', (code) => {
-  logger('client exit %d', code);
+  logger('app exit %d', code);
 });
