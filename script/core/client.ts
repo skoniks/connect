@@ -37,8 +37,8 @@ const REQ_TTL = 30000;
 const MAX_TTL = 60000;
 
 export class Client {
-  private upnp: UPNP;
-  private peers: Socket[];
+  private upnp?: UPNP;
+  private peers: Socket[] = [];
   private server: Server;
   private privateKey: Buffer;
   private publicKey: Buffer;
@@ -90,15 +90,14 @@ export class Client {
     '/exit': {
       desc: 'close an application',
       action: async () => {
-        await this.upnp.destroy();
+        if (this.upnp) await this.upnp.destroy();
         setTimeout(() => process.exit(1), 3000);
       },
     },
   };
 
-  constructor(upnp: UPNP) {
-    this.upnp = upnp;
-    this.peers = [];
+  constructor(upnp?: UPNP) {
+    if (upnp) this.upnp = upnp;
     this.server = createServer();
     this.privateKey = generatePrivate();
     this.publicKey = getPublicCompressed(this.privateKey);
@@ -126,21 +125,33 @@ export class Client {
 
   // * Networking
   public async listen() {
-    this.ip = await this.upnp.externalIp();
-    const { address: host } = this.upnp.gateway;
-    const { port } = await new Promise(
-      (resolve: (info: AddressInfo) => void, reject) => {
+    if (this.upnp) {
+      this.ip = await this.upnp.externalIp();
+      const { address: host } = this.upnp.gateway;
+      const { port } = await new Promise(
+        (resolve: (info: AddressInfo) => void, reject) => {
+          this.server.once('listening', () => {
+            resolve(<AddressInfo>this.server.address());
+          });
+          this.server.once('error', (err) => {
+            reject(err.message);
+          });
+          this.server.listen(0, host);
+        },
+      );
+      await this.upnp.portMapping(port, 'TCP');
+      logger('port %d mapped', port);
+    } else {
+      await new Promise((resolve: (info: AddressInfo) => void, reject) => {
         this.server.once('listening', () => {
           resolve(<AddressInfo>this.server.address());
         });
         this.server.once('error', (err) => {
           reject(err.message);
         });
-        this.server.listen(0, host);
-      },
-    );
-    await this.upnp.portMapping(port, 'TCP');
-    logger('port %d mapped', port);
+        this.server.listen(0, '0.0.0.0');
+      });
+    }
   }
 
   private handleConnection(socket: Socket) {

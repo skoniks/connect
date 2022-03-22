@@ -10,10 +10,16 @@ readline.prompt(true);
 const logger = createLogger('Main', true);
 logger('app starting');
 setImmediate(async () => {
-  const upnp = await UPNP.create(true);
-  const client = new Client(upnp);
-  await client.listen();
-  client.startInterface();
+  try {
+    const upnp = await UPNP.create(true);
+    const client = new Client(upnp);
+    await client.listen();
+    client.startInterface();
+  } catch (error) {
+    const client = new Client();
+    await client.listen();
+    client.startInterface();
+  }
 });
 process.on('exit', (code) => {
   logger('exit %d', code);
