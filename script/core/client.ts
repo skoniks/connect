@@ -1,5 +1,11 @@
 import { ec } from 'elliptic';
-import { AddressInfo, createServer, Server, Socket } from 'net';
+import {
+  AddressInfo,
+  createConnection,
+  createServer,
+  Server,
+  Socket,
+} from 'net';
 import { clearScreen, createLogger, EC, readline } from '../utils';
 import { UPNP } from './upnp';
 
@@ -9,7 +15,8 @@ interface Commands {
   [key: string]: {
     args?: string[];
     desc: string;
-    action: (args: unknown) => void;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    action: (...args: any) => void;
   };
 }
 
@@ -30,11 +37,13 @@ export class Client {
     '/connect': {
       args: ['ip:port'],
       desc: 'connect to peer',
-      action: () => this.printHelp(),
+      action: (address: string) => {
+        this.createConnection(address);
+      },
     },
-    '/search': {
-      args: ['user_public_key'],
-      desc: 'search for user by his key',
+    '/invite': {
+      args: ['key'],
+      desc: 'invite user by his key',
       action: () => this.printHelp(),
     },
     '/exit': {
@@ -89,7 +98,7 @@ export class Client {
   private handleConnection(socket: Socket) {
     const { remoteAddress, remotePort } = socket;
     const address = `${remoteAddress}:${remotePort}`;
-    logger('connection form %s', address);
+    logger('connection %s', address);
     this.peers.push(socket);
     socket.on('data', (data) => {
       logger('data %s (%d bytes)', address, data.length);
@@ -103,6 +112,29 @@ export class Client {
       const index = this.peers.indexOf(socket);
       if (index !== -1) this.peers.splice(index, 1);
     });
+  }
+
+  private async createConnection(address: string) {
+    const [host, port] = address.trim().split(':');
+    try {
+      const socket = await new Promise(
+        (resolve: (info: Socket) => void, reject) => {
+          const socket = createConnection({
+            host,
+            port: Number(port),
+          });
+          socket.once('connect', () => {
+            resolve(socket);
+          });
+          socket.once('error', (err) => {
+            reject(err.message);
+          });
+        },
+      );
+      this.handleConnection(socket);
+    } catch (error) {
+      logger('connection faild - %s', error);
+    }
   }
 
   private broadcastData(data: Buffer) {
@@ -125,7 +157,7 @@ export class Client {
       type CMD = keyof typeof this.commands;
       const command = this.commands[<CMD>key];
       if (command !== undefined) {
-        command.action(args);
+        command.action(...args);
       } else {
         logger('invalid command');
       }
