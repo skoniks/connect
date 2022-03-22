@@ -46,8 +46,8 @@ export const createLogger = (namespace: string | Debugger, prompt = false) => {
   const logger = typeof namespace === 'string' ? debug(namespace) : namespace;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const caller = (formatter: any, ...args: any[]) => {
-    !prompt || cursorTo(process.stdout, 0);
-    !prompt || clearLine(process.stdout, 0);
+    !prompt || cursorTo(output, 0);
+    !prompt || clearLine(output, 0);
     logger(formatter, ...args);
     !prompt || readline.prompt(true);
   };
@@ -63,6 +63,14 @@ export const extendLogger = (
 ) => {
   const next = prev.extend(namespace, delimiter);
   return createLogger(next, prompt);
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const promptLog = (formatter: any, ...args: any[]) => {
+  cursorTo(output, 0);
+  clearLine(output, 0);
+  console.log(formatter, ...args);
+  readline.prompt(true);
 };
 
 export const sha256 = (data: BinaryLike) =>

@@ -14,6 +14,7 @@ import {
 import {
   createLogger,
   fromBuffer,
+  promptLog,
   readline,
   sha256,
   toBuffer,
@@ -285,8 +286,7 @@ export class Client {
             );
             const { remoteAddress, remotePort } = socket;
             const address = `${remoteAddress}:${remotePort}`;
-            console.log('< %s > %s', address, payload.toString());
-            readline.prompt(true);
+            promptLog('< %s > %s', address, payload.toString());
           }
           break;
         }
