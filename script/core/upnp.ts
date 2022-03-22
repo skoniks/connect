@@ -83,7 +83,7 @@ export class UPNP {
               resolve(true);
             });
             socket.on('error', (err) => {
-              slog('error\n%O', err);
+              slog('error - %o', err.message);
               socket.close();
             });
             socket.on('close', () => {

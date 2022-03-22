@@ -10,17 +10,11 @@ readline.prompt(true);
 const logger = createLogger('Main', true);
 logger('app starting');
 setImmediate(async () => {
-  const upnp = await UPNP.create(true, 0);
-  const { address } = upnp.gateway;
-  const ip = await upnp.externalIp();
-  logger('external ip %s', ip);
-  const client = new Client(ip);
-  const { port } = await client.listen(address);
-  await upnp.portMapping(port, 'TCP');
-  logger('port %d mapped', port);
+  const upnp = await UPNP.create(true);
+  const client = new Client(upnp);
+  await client.listen();
   client.startInterface();
 });
-
 process.on('exit', (code) => {
-  logger('app exit %d', code);
+  logger('exit %d', code);
 });

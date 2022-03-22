@@ -1,6 +1,7 @@
 import { ec } from 'elliptic';
 import { AddressInfo, createServer, Server, Socket } from 'net';
 import { clearScreen, createLogger, EC, readline } from '../utils';
+import { UPNP } from './upnp';
 
 const logger = createLogger('Client', true);
 
@@ -13,7 +14,8 @@ interface Commands {
 }
 
 export class Client {
-  private ip: string;
+  private upnp: UPNP;
+  private ip?: string;
   private host?: string;
   private port?: number;
   private server: Server;
@@ -35,24 +37,28 @@ export class Client {
       desc: 'search for user by his key',
       action: () => this.printHelp(),
     },
+    '/exit': {
+      desc: 'close an application',
+      action: async () => {
+        await this.upnp.destroy();
+        process.exit(1);
+      },
+    },
   };
 
-  constructor(ip: string) {
-    this.ip = ip;
+  constructor(upnp: UPNP) {
+    this.upnp = upnp;
     this.peers = [];
     this.server = createServer();
     this.keys = EC.genKeyPair();
     this.server.on('listening', () => {
-      const address = <AddressInfo>this.server.address();
-      this.host = address.address;
-      this.port = address.port;
       logger('listening on %s:%d', this.host, this.port);
     });
     this.server.on('connection', (socket) => {
       this.handleConnection(socket);
     });
     this.server.on('error', (err) => {
-      logger('error | %o', err.message);
+      logger('error - %o', err.message);
     });
     this.server.on('close', () => {
       logger('close');
@@ -60,16 +66,24 @@ export class Client {
   }
 
   // * Networking
-  public listen(host: string) {
-    return new Promise((resolve: (info: AddressInfo) => void, reject) => {
-      this.server.once('listening', () => {
-        resolve(<AddressInfo>this.server.address());
-      });
-      this.server.once('error', (err) => {
-        reject(err.message);
-      });
-      this.server.listen(0, host);
-    });
+  public async listen() {
+    this.ip = await this.upnp.externalIp();
+    const { address: host } = this.upnp.gateway;
+    const address = await new Promise(
+      (resolve: (info: AddressInfo) => void, reject) => {
+        this.server.once('listening', () => {
+          resolve(<AddressInfo>this.server.address());
+        });
+        this.server.once('error', (err) => {
+          reject(err.message);
+        });
+        this.server.listen(0, host);
+      },
+    );
+    this.host = address.address;
+    this.port = address.port;
+    await this.upnp.portMapping(this.port, 'TCP');
+    logger('port %d mapped', this.port);
   }
 
   private handleConnection(socket: Socket) {
