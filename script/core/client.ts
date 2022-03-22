@@ -1,4 +1,9 @@
-import { ec } from 'elliptic';
+import {
+  decrypt,
+  encrypt,
+  generatePrivate,
+  getPublicCompressed,
+} from 'eccrypto';
 import {
   AddressInfo,
   createConnection,
@@ -6,14 +11,7 @@ import {
   Server,
   Socket,
 } from 'net';
-import {
-  clearScreen,
-  createLogger,
-  EC,
-  parse,
-  readline,
-  sha256,
-} from '../utils';
+import { createLogger, fromBuffer, readline, sha256, toBuffer } from '../utils';
 import { UPNP } from './upnp';
 
 const logger = createLogger('Client', true);
@@ -27,29 +25,39 @@ interface Commands {
   };
 }
 
-type Cache = { [key: string]: BigInt };
+type Cache = { [key: string]: number };
 
 enum Opcode {
   INVITE,
   ACCEPT,
+  MESSAGE,
 }
 
-const MAXTTL = 60000;
+const REQ_TTL = 30000;
+const MAX_TTL = 60000;
 
 export class Client {
   private upnp: UPNP;
+  private peers: Socket[];
+  private server: Server;
+  private privateKey: Buffer;
+  private publicKey: Buffer;
+
   private ip?: string;
   private host?: string;
   private port?: number;
-  private server: Server;
-  private peers: Socket[];
-  private keys: ec.KeyPair;
+
   private cache: Cache = {};
+  private chat?: number;
 
   private commands: Commands = {
     '/help': {
       desc: 'print this command list',
       action: () => this.printHelp(),
+    },
+    '/peers': {
+      desc: 'print peers list',
+      action: () => this.printPeers(),
     },
     '/connect': {
       args: ['ip:port'],
@@ -60,14 +68,23 @@ export class Client {
     },
     '/invite': {
       args: ['key'],
-      desc: 'invite user by his key',
-      action: (key: string) => {
-        const buffer = this.buildData(Opcode.INVITE, {
-          hash: sha256(key.trim()),
+      desc: 'invite user to chat by his key',
+      action: async (key: string) => {
+        const payload = toBuffer({
           address: `${this.ip}:${this.port}`,
-          key: this.getPublic(),
+          publicKey: this.publicKey.toString('hex'),
+        });
+        const buffer = this.buildData(Opcode.INVITE, {
+          hash: sha256(key),
+          payload: await encrypt(Buffer.from(key, 'hex'), payload),
         });
         this.broadcastData(buffer);
+      },
+    },
+    '/close': {
+      desc: 'close current chat',
+      action: () => {
+        logger('todo...');
       },
     },
     '/exit': {
@@ -83,8 +100,12 @@ export class Client {
     this.upnp = upnp;
     this.peers = [];
     this.server = createServer();
-    this.keys = EC.genKeyPair();
+    this.privateKey = generatePrivate();
+    this.publicKey = getPublicCompressed(this.privateKey);
     this.server.on('listening', () => {
+      const address = <AddressInfo>this.server.address();
+      this.host = address.address;
+      this.port = address.port;
       logger('listening on %s:%d', this.host, this.port);
     });
     this.server.on('connection', (socket) => {
@@ -96,13 +117,18 @@ export class Client {
     this.server.on('close', () => {
       logger('close');
     });
+    setInterval(() => {
+      Object.entries(this.cache).forEach(([key, value]) => {
+        if (value < Date.now()) delete this.cache[key];
+      });
+    }, 10000);
   }
 
   // * Networking
   public async listen() {
     this.ip = await this.upnp.externalIp();
     const { address: host } = this.upnp.gateway;
-    const address = await new Promise(
+    const { port } = await new Promise(
       (resolve: (info: AddressInfo) => void, reject) => {
         this.server.once('listening', () => {
           resolve(<AddressInfo>this.server.address());
@@ -113,10 +139,8 @@ export class Client {
         this.server.listen(0, host);
       },
     );
-    this.host = address.address;
-    this.port = address.port;
-    await this.upnp.portMapping(this.port, 'TCP');
-    logger('port %d mapped', this.port);
+    await this.upnp.portMapping(port, 'TCP');
+    logger('port %d mapped', port);
   }
 
   private handleConnection(socket: Socket) {
@@ -135,11 +159,12 @@ export class Client {
       logger('close %s', address);
       const index = this.peers.indexOf(socket);
       if (index !== -1) this.peers.splice(index, 1);
+      if (this.chat === index) this.chat = undefined;
     });
   }
 
   private async createConnection(address: string) {
-    const [host, port] = address.trim().split(':');
+    const [host, port] = address.split(':');
     try {
       const socket = await new Promise(
         (resolve: (info: Socket) => void, reject) => {
@@ -159,70 +184,70 @@ export class Client {
       return socket;
     } catch (error) {
       logger('connection faild - %s', error);
-      return null;
+      return undefined;
     }
   }
 
-  private handleData(socket: Socket, buffer: Buffer) {
-    // TODO: Cache clean
-    const hash = sha256(buffer);
-    if (this.cache[hash]) {
-      logger('cached');
-      return;
-    }
-    const opcode = buffer.readUint8(0);
-    const expire = buffer.readBigUInt64BE(1);
-    this.cache[hash] = expire;
-    const ttl = expire - BigInt(Date.now());
-    if (ttl > BigInt(MAXTTL) || ttl < 0) {
-      logger('expire %d', expire);
-      logger('ttl %d', ttl);
-      return;
-    }
-    const data = parse(buffer.toString('utf8', 9));
-    if (!data) {
-      logger('!data %O', data);
-      return;
-    }
-    switch (opcode) {
-      case Opcode.INVITE: {
-        const { hash, address, key } = data;
-        if (!hash || !address || !key) {
-          logger('data %O', data);
+  private async handleData(socket: Socket, buffer: Buffer) {
+    try {
+      const hash = sha256(buffer);
+      if (this.cache[hash]) throw new Error('already cached');
+      const opcode = buffer.readUint8(0);
+      const expire = Number(buffer.readBigUInt64BE(1));
+      const ttl = expire - Date.now();
+      if (ttl > MAX_TTL || ttl < 0) throw new Error('invalid ttl');
+      const data = fromBuffer(buffer, 9);
+      if (!data) throw new Error('invalid data');
+      this.cache[hash] = expire;
+      switch (opcode) {
+        case Opcode.INVITE: {
+          if (this.chat) throw new Error('already chatting');
+          if (!data.hash || !data.payload) throw new Error('invalid params');
+          if (data.hash === sha256(this.publicKey.toString('hex'))) {
+            logger('%s - verify', Opcode[opcode], '');
+            const payload = await decrypt(this.privateKey, data.payload);
+            const { address, publicKey } = fromBuffer(payload);
+            if (!address || !publicKey) throw new Error('invalid payload');
+            let socket = this.peers.find((socket) => {
+              const { address: host, port } = <AddressInfo>socket.address();
+              return address == `${host}:${port}`;
+            });
+            if (!socket) socket = await this.createConnection(address);
+            if (!socket) throw new Error('connection faild');
+            const response = await encrypt(
+              Buffer.from(publicKey, 'hex'),
+              toBuffer({
+                publicKey: this.publicKey.toString('hex'),
+                address: `${this.ip}:${this.port}`,
+              }),
+            );
+            const buffer = this.buildData(Opcode.ACCEPT, response);
+            this.writeData(socket, buffer);
+            this.chat = this.peers.indexOf(socket);
+          } else {
+            this.broadcastData(buffer);
+          }
           return;
         }
-        // key
-        if (hash === sha256(this.getPublic())) {
-          this.createConnection(address).then((socket) => {
-            if (!socket) {
-              logger('!socket %s', address);
-              return;
-            }
-            const buffer = this.buildData(Opcode.ACCEPT, {
-              key: this.getPublic(),
-              address: `${this.ip}:${this.port}`,
-            });
-            this.writeData(socket, buffer);
-          });
-        } else {
-          this.broadcastData(data);
+        case Opcode.ACCEPT: {
+          logger('ACCEPT', data);
+          return;
         }
-        return;
+        default:
+          throw new Error('invalid opcode');
       }
-      case Opcode.ACCEPT: {
-        logger('ACCEPT', data);
-        return;
-      }
+    } catch (err) {
+      logger('data handle error - %s', (<Error>err).message);
     }
   }
 
-  private buildData(opcode: Opcode, data: unknown, ttl = MAXTTL / 2) {
+  private buildData(opcode: Opcode, data: unknown, ttl = REQ_TTL) {
     const opcodeBuffer = Buffer.alloc(1);
     opcodeBuffer.writeUint8(opcode);
     const expire = BigInt(Date.now() + ttl);
     const expireBuffer = Buffer.alloc(8);
     expireBuffer.writeBigUInt64BE(expire);
-    const dataBuffer = Buffer.from(JSON.stringify(data));
+    const dataBuffer = toBuffer(data);
     return Buffer.concat([opcodeBuffer, expireBuffer, dataBuffer]);
   }
 
@@ -238,11 +263,11 @@ export class Client {
 
   // * Interface
   public startInterface() {
-    clearScreen(true);
+    // clearScreen(true);
     logger('remote address - %s:%d', this.ip, this.port);
-    logger('key - %s', this.getPublic());
+    logger('key - %s', this.publicKey.toString('hex'));
+    this.printPeers();
     this.printHelp();
-    logger('peers: %d', this.peers.length);
     readline.on('line', (line) => {
       // logger('new line %s', line);
       // TODO: if !connected ...
@@ -266,12 +291,11 @@ export class Client {
       .forEach((line) => logger(line));
   }
 
-  // * Security
-  private getPublic() {
-    return this.keys.getPublic(true, 'hex');
-  }
-
-  private getPrivate() {
-    return this.keys.getPrivate('hex');
+  private printPeers() {
+    logger('peers: %d', this.peers.length);
+    this.peers.forEach((socket, index) => {
+      const { remoteAddress, remotePort } = socket;
+      logger('- %d. %s:%d', index, remoteAddress, remotePort);
+    });
   }
 }

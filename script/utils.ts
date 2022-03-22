@@ -1,6 +1,5 @@
 import { BinaryLike, createHash } from 'crypto';
 import debug, { Debugger } from 'debug';
-import { ec } from 'elliptic';
 import { IncomingMessage, request as http, RequestOptions } from 'http';
 import { stdin as input, stdout as output } from 'process';
 import {
@@ -65,8 +64,6 @@ export const extendLogger = (
   return createLogger(next, prompt);
 };
 
-export const EC = new ec('secp256k1');
-
 export const sha256 = (data: BinaryLike) =>
   createHash('sha256').update(data).digest('hex');
 
@@ -78,8 +75,10 @@ export const parse = (data: string) => {
   }
 };
 
-export const ub8 = (i: number) => {
-  const buffer = Buffer.alloc(1);
-  buffer.writeUint8(i);
-  return buffer;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const toBuffer = (data: any) => Buffer.from(JSON.stringify(data));
+
+export const fromBuffer = (buffer: Buffer, start = 0) => {
+  const data = buffer.toString('utf8', start);
+  return parse(data);
 };
