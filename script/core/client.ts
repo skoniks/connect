@@ -70,13 +70,18 @@ export class Client {
       args: ['key'],
       desc: 'invite user to chat by his key',
       action: async (key: string) => {
-        const payload = toBuffer({
-          address: `${this.ip}:${this.port}`,
-          publicKey: this.publicKey.toString('hex'),
-        });
+        logger('encrypting by "%s"', key);
+        const payload = await encrypt(
+          Buffer.from(key, 'hex'),
+          toBuffer({
+            address: `${this.ip}:${this.port}`,
+            publicKey: this.publicKey.toString('hex'),
+          }),
+        );
+        console.log(JSON.stringify(payload));
         const buffer = this.buildData(Opcode.INVITE, {
           hash: sha256(key),
-          payload: await encrypt(Buffer.from(key, 'hex'), payload),
+          payload,
         });
         this.broadcastData(buffer);
       },
@@ -215,9 +220,11 @@ export class Client {
           if (this.chat) throw new Error('already chatting');
           if (!data.hash || !data.payload) throw new Error('invalid params');
           if (data.hash === sha256(this.publicKey.toString('hex'))) {
-            logger('%s - verify', Opcode[opcode], '');
+            logger('verify - %O', data.payload);
+            console.log(JSON.stringify(data.payload));
             const payload = await decrypt(this.privateKey, data.payload);
             const { address, publicKey } = fromBuffer(payload);
+            logger('verify - %s, %s, %s', Opcode[opcode], address, publicKey);
             if (!address || !publicKey) throw new Error('invalid payload');
             let socket = this.peers.find((socket) => {
               const { address: host, port } = <AddressInfo>socket.address();
@@ -248,7 +255,7 @@ export class Client {
           throw new Error('invalid opcode');
       }
     } catch (err) {
-      logger('data handle error - %s', (<Error>err).message);
+      logger('data handle error - %O', err);
     }
   }
 
