@@ -56,6 +56,7 @@ export class Client {
 
   private cache: Cache = {};
   private chat?: number;
+  private chatKey?: string;
 
   private commands: Commands = {
     '/help': {
@@ -76,32 +77,22 @@ export class Client {
     '/invite': {
       args: ['key'],
       desc: 'invite user to chat by his key',
-      action: async (key: string) => {
-        const payload = await encrypt(
-          Buffer.from(key, 'hex'),
-          toBuffer({
-            address: `${this.ip}:${this.port}`,
-            publicKey: this.publicKey.toString('hex'),
-          }),
-        );
-        const buffer = this.buildData(Opcode.INVITE, {
-          hash: sha256(key),
-          payload,
-        });
-        this.broadcastData(buffer);
+      action: (key: string) => {
+        this.broadcastInvite(key);
       },
     },
     '/close': {
       desc: 'close current chat',
       action: () => {
-        logger('todo...');
+        this.chat = undefined;
+        logger('chat closed');
       },
     },
     '/exit': {
       desc: 'close an application',
       action: async () => {
         if (this.upnp) await this.upnp.destroy();
-        setTimeout(() => process.exit(1), 3000);
+        setTimeout(() => process.exit(0), 3000);
       },
     },
   };
@@ -185,6 +176,7 @@ export class Client {
   }
 
   private async createConnection(address: string) {
+    logger('connecting to %s', address);
     const [host, port] = address.split(':');
     try {
       const socket = await new Promise(
@@ -219,7 +211,7 @@ export class Client {
       if (ttl > MAX_TTL || ttl < 0) throw new Error('invalid ttl');
       const data = fromBuffer(buffer, 9);
       if (!data) throw new Error('invalid data');
-      this.cache[hash] = expire;
+      logger('verify - %s', Opcode[opcode]);
       switch (opcode) {
         case Opcode.INVITE: {
           if (this.chat) throw new Error('already chatting');
@@ -230,7 +222,6 @@ export class Client {
               toEcies(data.payload),
             );
             const { address, publicKey } = fromBuffer(payload);
-            logger('verify - %s, %s, %s', Opcode[opcode], address, publicKey);
             if (!address || !publicKey) throw new Error('invalid payload');
             let socket = this.peers.find((socket) => {
               const { address: host, port } = <AddressInfo>socket.address();
@@ -241,28 +232,87 @@ export class Client {
             const response = await encrypt(
               Buffer.from(publicKey, 'hex'),
               toBuffer({
-                publicKey: this.publicKey.toString('hex'),
                 address: `${this.ip}:${this.port}`,
+                publicKey: this.publicKey.toString('hex'),
               }),
             );
-            const buffer = this.buildData(Opcode.ACCEPT, response);
+            const buffer = this.buildData(Opcode.ACCEPT, {
+              hash: sha256(publicKey),
+              payload: response,
+            });
             this.writeData(socket, buffer);
-            this.chat = this.peers.indexOf(socket);
+            const index = this.peers.indexOf(socket);
+            if (index !== -1) {
+              this.chat = index;
+              this.chatKey = publicKey;
+              const { remoteAddress, remotePort } = socket;
+              const address = `${remoteAddress}:${remotePort}`;
+              logger('chat with %s', address);
+            }
           } else {
             this.broadcastData(buffer);
           }
-          return;
+          break;
         }
         case Opcode.ACCEPT: {
-          logger('ACCEPT', data);
-          return;
+          if (this.chat) throw new Error('already chatting');
+          if (!data.hash || !data.payload) throw new Error('invalid params');
+          if (data.hash === sha256(this.publicKey.toString('hex'))) {
+            const payload = await decrypt(
+              this.privateKey,
+              toEcies(data.payload),
+            );
+            const { address, publicKey } = fromBuffer(payload);
+            if (!address || !publicKey) throw new Error('invalid payload');
+            const index = this.peers.indexOf(socket);
+            if (index !== -1) {
+              this.chat = index;
+              this.chatKey = publicKey;
+              const { remoteAddress, remotePort } = socket;
+              const address = `${remoteAddress}:${remotePort}`;
+              logger('chat with %s', address);
+            }
+          }
+          break;
+        }
+        case Opcode.MESSAGE: {
+          if (!this.chat) throw new Error('no chatting');
+          if (!data.hash || !data.payload) throw new Error('invalid params');
+          if (data.hash === sha256(this.publicKey.toString('hex'))) {
+            const payload = await decrypt(
+              this.privateKey,
+              toEcies(data.payload),
+            );
+            const { remoteAddress, remotePort } = socket;
+            const address = `${remoteAddress}:${remotePort}`;
+            console.log('< %s > %s', address, payload.toString());
+            readline.prompt(true);
+          }
+          break;
         }
         default:
           throw new Error('invalid opcode');
       }
     } catch (err) {
-      logger('data handle error - %O', err);
+      const { message } = <Error>err;
+      logger('data handle - %s', message);
     }
+  }
+
+  private async broadcastInvite(key: string) {
+    logger('invite %s', key);
+    const payload = await encrypt(
+      Buffer.from(key, 'hex'),
+      toBuffer({
+        address: `${this.ip}:${this.port}`,
+        publicKey: this.publicKey.toString('hex'),
+      }),
+    );
+    const buffer = this.buildData(Opcode.INVITE, {
+      hash: sha256(key),
+      payload,
+    });
+    this.broadcastData(buffer);
   }
 
   private buildData(opcode: Opcode, data: unknown, ttl = REQ_TTL) {
@@ -275,13 +325,19 @@ export class Client {
     return Buffer.concat([opcodeBuffer, expireBuffer, dataBuffer]);
   }
 
-  private writeData(socket: Socket, data: Buffer) {
-    socket.write(data);
+  private writeData(socket: Socket, buffer: Buffer) {
+    const hash = sha256(buffer);
+    const expire = Number(buffer.readBigUInt64BE(1));
+    this.cache[hash] = expire;
+    socket.write(buffer);
   }
 
-  private broadcastData(data: Buffer) {
+  private broadcastData(buffer: Buffer) {
+    const hash = sha256(buffer);
+    const expire = Number(buffer.readBigUInt64BE(1));
+    this.cache[hash] = expire;
     this.peers.forEach((socket) => {
-      socket.write(data);
+      socket.write(buffer);
     });
   }
 
@@ -293,13 +349,21 @@ export class Client {
     this.printPeers();
     this.printHelp();
     readline.on('line', (line) => {
-      // logger('new line %s', line);
-      // TODO: if !connected ...
       const [key, ...args] = line.trim().split(' ');
       type CMD = keyof typeof this.commands;
       const command = this.commands[<CMD>key];
       if (command !== undefined) {
         command.action(...args);
+      } else if (this.chat && this.chatKey) {
+        const key = this.chatKey;
+        const socket = this.peers[this.chat];
+        encrypt(Buffer.from(key, 'hex'), Buffer.from(line)).then((payload) => {
+          const buffer = this.buildData(Opcode.INVITE, {
+            hash: sha256(key),
+            payload,
+          });
+          this.writeData(socket, buffer);
+        });
       } else {
         logger('invalid command');
       }
