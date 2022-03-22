@@ -1,3 +1,4 @@
+import { BinaryLike, createHash } from 'crypto';
 import debug, { Debugger } from 'debug';
 import { ec } from 'elliptic';
 import { IncomingMessage, request as http, RequestOptions } from 'http';
@@ -65,6 +66,17 @@ export const extendLogger = (
 };
 
 export const EC = new ec('secp256k1');
+
+export const sha256 = (data: BinaryLike) =>
+  createHash('sha256').update(data).digest('hex');
+
+export const parse = (data: string) => {
+  try {
+    return JSON.parse(data);
+  } catch (error) {
+    return null;
+  }
+};
 
 export const ub8 = (i: number) => {
   const buffer = Buffer.alloc(1);

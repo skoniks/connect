@@ -6,7 +6,14 @@ import {
   Server,
   Socket,
 } from 'net';
-import { clearScreen, createLogger, EC, readline } from '../utils';
+import {
+  clearScreen,
+  createLogger,
+  EC,
+  parse,
+  readline,
+  sha256,
+} from '../utils';
 import { UPNP } from './upnp';
 
 const logger = createLogger('Client', true);
@@ -20,6 +27,15 @@ interface Commands {
   };
 }
 
+type Cache = { [key: string]: BigInt };
+
+enum Opcode {
+  INVITE,
+  ACCEPT,
+}
+
+const MAXTTL = 60000;
+
 export class Client {
   private upnp: UPNP;
   private ip?: string;
@@ -28,6 +44,7 @@ export class Client {
   private server: Server;
   private peers: Socket[];
   private keys: ec.KeyPair;
+  private cache: Cache = {};
 
   private commands: Commands = {
     '/help': {
@@ -44,7 +61,14 @@ export class Client {
     '/invite': {
       args: ['key'],
       desc: 'invite user by his key',
-      action: () => this.printHelp(),
+      action: (key: string) => {
+        const buffer = this.buildData(Opcode.INVITE, {
+          hash: sha256(key.trim()),
+          address: `${this.ip}:${this.port}`,
+          key: this.getPublic(),
+        });
+        this.broadcastData(buffer);
+      },
     },
     '/exit': {
       desc: 'close an application',
@@ -100,9 +124,9 @@ export class Client {
     const address = `${remoteAddress}:${remotePort}`;
     logger('connection %s', address);
     this.peers.push(socket);
-    socket.on('data', (data) => {
-      logger('data %s (%d bytes)', address, data.length);
-      // this.handleData(data, id);
+    socket.on('data', (buffer) => {
+      logger('data %s (%d bytes)', address, buffer.length);
+      this.handleData(socket, buffer);
     });
     socket.on('error', (err) => {
       logger('error %s - %o', address, err.message);
@@ -132,9 +156,78 @@ export class Client {
         },
       );
       this.handleConnection(socket);
+      return socket;
     } catch (error) {
       logger('connection faild - %s', error);
+      return null;
     }
+  }
+
+  private handleData(socket: Socket, buffer: Buffer) {
+    // TODO: Cache clean
+    const hash = sha256(buffer);
+    if (this.cache[hash]) {
+      logger('cached');
+      return;
+    }
+    const opcode = buffer.readUint8(0);
+    const expire = buffer.readBigUInt64BE(1);
+    this.cache[hash] = expire;
+    const ttl = expire - BigInt(Date.now());
+    if (ttl > BigInt(MAXTTL) || ttl < 0) {
+      logger('expire %d', expire);
+      logger('ttl %d', ttl);
+      return;
+    }
+    const data = parse(buffer.toString('utf8', 9));
+    if (!data) {
+      logger('!data %O', data);
+      return;
+    }
+    switch (opcode) {
+      case Opcode.INVITE: {
+        const { hash, address, key } = data;
+        if (!hash || !address || !key) {
+          logger('data %O', data);
+          return;
+        }
+        // key
+        if (hash === sha256(this.getPublic())) {
+          this.createConnection(address).then((socket) => {
+            if (!socket) {
+              logger('!socket %s', address);
+              return;
+            }
+            const buffer = this.buildData(Opcode.ACCEPT, {
+              key: this.getPublic(),
+              address: `${this.ip}:${this.port}`,
+            });
+            this.writeData(socket, buffer);
+          });
+        } else {
+          this.broadcastData(data);
+        }
+        return;
+      }
+      case Opcode.ACCEPT: {
+        logger('ACCEPT', data);
+        return;
+      }
+    }
+  }
+
+  private buildData(opcode: Opcode, data: unknown, ttl = MAXTTL / 2) {
+    const opcodeBuffer = Buffer.alloc(1);
+    opcodeBuffer.writeUint8(opcode);
+    const expire = BigInt(Date.now() + ttl);
+    const expireBuffer = Buffer.alloc(8);
+    expireBuffer.writeBigUInt64BE(expire);
+    const dataBuffer = Buffer.from(JSON.stringify(data));
+    return Buffer.concat([opcodeBuffer, expireBuffer, dataBuffer]);
+  }
+
+  private writeData(socket: Socket, data: Buffer) {
+    socket.write(data);
   }
 
   private broadcastData(data: Buffer) {
@@ -147,7 +240,7 @@ export class Client {
   public startInterface() {
     clearScreen(true);
     logger('remote address - %s:%d', this.ip, this.port);
-    logger('public key - %s', this.getPublic());
+    logger('key - %s', this.getPublic());
     this.printHelp();
     logger('peers: %d', this.peers.length);
     readline.on('line', (line) => {

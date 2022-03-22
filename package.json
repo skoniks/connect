@@ -6,7 +6,7 @@
   "main": "./dist/index.js",
   "scripts": {
     "start": "tsc && node .",
-    "pkg": "tsc && pkg . -dC GZip",
+    "pkg": "tsc && pkg . -C GZip",
     "nexe": "tsc && nexe -o ./build/connect.exe --build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
