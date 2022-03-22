@@ -1,5 +1,6 @@
 import { BinaryLike, createHash } from 'crypto';
 import debug, { Debugger } from 'debug';
+import { Ecies } from 'eccrypto';
 import { IncomingMessage, request as http, RequestOptions } from 'http';
 import { stdin as input, stdout as output } from 'process';
 import {
@@ -81,4 +82,10 @@ export const toBuffer = (data: any) => Buffer.from(JSON.stringify(data));
 export const fromBuffer = (buffer: Buffer, start = 0) => {
   const data = buffer.toString('utf8', start);
   return parse(data);
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const toEcies = (data: any) => {
+  for (const key in data) data[key] = Buffer.from(data[key].data);
+  return <Ecies>data;
 };

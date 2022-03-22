@@ -11,7 +11,14 @@ import {
   Server,
   Socket,
 } from 'net';
-import { createLogger, fromBuffer, readline, sha256, toBuffer } from '../utils';
+import {
+  createLogger,
+  fromBuffer,
+  readline,
+  sha256,
+  toBuffer,
+  toEcies,
+} from '../utils';
 import { UPNP } from './upnp';
 
 const logger = createLogger('Client', true);
@@ -70,7 +77,6 @@ export class Client {
       args: ['key'],
       desc: 'invite user to chat by his key',
       action: async (key: string) => {
-        logger('encrypting by "%s"', key);
         const payload = await encrypt(
           Buffer.from(key, 'hex'),
           toBuffer({
@@ -78,7 +84,6 @@ export class Client {
             publicKey: this.publicKey.toString('hex'),
           }),
         );
-        console.log(JSON.stringify(payload));
         const buffer = this.buildData(Opcode.INVITE, {
           hash: sha256(key),
           payload,
@@ -220,9 +225,10 @@ export class Client {
           if (this.chat) throw new Error('already chatting');
           if (!data.hash || !data.payload) throw new Error('invalid params');
           if (data.hash === sha256(this.publicKey.toString('hex'))) {
-            logger('verify - %O', data.payload);
-            console.log(JSON.stringify(data.payload));
-            const payload = await decrypt(this.privateKey, data.payload);
+            const payload = await decrypt(
+              this.privateKey,
+              toEcies(data.payload),
+            );
             const { address, publicKey } = fromBuffer(payload);
             logger('verify - %s, %s, %s', Opcode[opcode], address, publicKey);
             if (!address || !publicKey) throw new Error('invalid payload');
