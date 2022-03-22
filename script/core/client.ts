@@ -158,7 +158,7 @@ export class Client {
   private handleConnection(socket: Socket) {
     const { remoteAddress, remotePort } = socket;
     const address = `${remoteAddress}:${remotePort}`;
-    logger('connection %s', address);
+    logger('new connection %s', address);
     this.peers.push(socket);
     socket.on('data', (buffer) => {
       logger('data %s (%d bytes)', address, buffer.length);
@@ -211,7 +211,7 @@ export class Client {
       if (ttl > MAX_TTL || ttl < 0) throw new Error('invalid ttl');
       const data = fromBuffer(buffer, 9);
       if (!data) throw new Error('invalid data');
-      logger('verify - %s', Opcode[opcode]);
+      if (!this.chat) logger('verify - %s', Opcode[opcode]);
       switch (opcode) {
         case Opcode.INVITE: {
           if (this.chat) throw new Error('already chatting');
@@ -295,7 +295,7 @@ export class Client {
       }
     } catch (err) {
       const { message } = <Error>err;
-      logger('data handle - %s', message);
+      if (!this.chat) logger('data handle - %s', message);
     }
   }
 
@@ -355,10 +355,11 @@ export class Client {
       if (command !== undefined) {
         command.action(...args);
       } else if (this.chat && this.chatKey) {
+        readline.prompt(true);
         const key = this.chatKey;
         const socket = this.peers[this.chat];
         encrypt(Buffer.from(key, 'hex'), Buffer.from(line)).then((payload) => {
-          const buffer = this.buildData(Opcode.INVITE, {
+          const buffer = this.buildData(Opcode.MESSAGE, {
             hash: sha256(key),
             payload,
           });
