@@ -12,6 +12,7 @@ import {
   Socket,
 } from 'net';
 import {
+  clearScreen,
   createLogger,
   fromBuffer,
   promptLog,
@@ -343,7 +344,7 @@ export class Client {
 
   // * Interface
   public startInterface() {
-    // clearScreen(true);
+    clearScreen(true);
     logger('remote address - %s:%d', this.ip, this.port);
     logger('key - %s', this.publicKey.toString('hex'));
     this.printPeers();
@@ -384,7 +385,7 @@ export class Client {
     logger('peers: %d', this.peers.length);
     this.peers.forEach((socket, index) => {
       const { remoteAddress, remotePort } = socket;
-      logger('- %d. %s:%d', index, remoteAddress, remotePort);
+      logger('- %d. %s:%d', index + 1, remoteAddress, remotePort);
     });
   }
 }
