@@ -137,7 +137,7 @@ export class Client {
           this.server.once('error', (err) => {
             reject(err.message);
           });
-          this.server.listen(0, host);
+          this.server.listen(Number(process.env.PORT) || 0, host);
         },
       );
       await this.upnp.portMapping(port, 'TCP');
@@ -150,7 +150,7 @@ export class Client {
         this.server.once('error', (err) => {
           reject(err.message);
         });
-        this.server.listen(0, '0.0.0.0');
+        this.server.listen(Number(process.env.PORT) || 0, '0.0.0.0');
       });
     }
   }
@@ -161,7 +161,7 @@ export class Client {
     logger('new connection %s', address);
     this.peers.push(socket);
     socket.on('data', (buffer) => {
-      logger('data %s (%d bytes)', address, buffer.length);
+      if (!this.chat) logger('data %s (%d bytes)', address, buffer.length);
       this.handleData(socket, buffer);
     });
     socket.on('error', (err) => {
@@ -175,7 +175,7 @@ export class Client {
     });
   }
 
-  private async createConnection(address: string) {
+  public async createConnection(address: string) {
     logger('connecting to %s', address);
     const [host, port] = address.split(':');
     try {
@@ -211,7 +211,7 @@ export class Client {
       if (ttl > MAX_TTL || ttl < 0) throw new Error('invalid ttl');
       const data = fromBuffer(buffer, 9);
       if (!data) throw new Error('invalid data');
-      if (!this.chat) logger('verify - %s', Opcode[opcode]);
+      if (!this.chat) logger('verify - opcode: %s', Opcode[opcode]);
       switch (opcode) {
         case Opcode.INVITE: {
           if (this.chat) throw new Error('already chatting');
@@ -293,8 +293,8 @@ export class Client {
         default:
           throw new Error('invalid opcode');
       }
-    } catch (err) {
-      const { message } = <Error>err;
+    } catch (error) {
+      const { message } = <Error>error;
       if (!this.chat) logger('data handle - %s', message);
     }
   }

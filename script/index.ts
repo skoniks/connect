@@ -7,19 +7,22 @@ import { createLogger, readline } from './utils';
 config() && debug.enable('*');
 readline.prompt(true);
 
+const DEFAULT = 'a.sknx.ru:8888';
+
 const logger = createLogger('Main', true);
 logger('app starting');
 setImmediate(async () => {
+  let upnp: UPNP | undefined;
   try {
-    const upnp = await UPNP.create(true);
-    const client = new Client(upnp);
-    await client.listen();
-    client.startInterface();
+    upnp = await UPNP.create(true);
   } catch (error) {
-    const client = new Client();
-    await client.listen();
-    client.startInterface();
+    const { message } = <Error>error;
+    logger('error - %s', message);
   }
+  const client = new Client(upnp);
+  await client.listen();
+  client.createConnection(DEFAULT);
+  client.startInterface();
 });
 process.on('exit', (code) => {
   logger('exit %d', code);
