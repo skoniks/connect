@@ -18,3 +18,15 @@ setImmediate(async () => {
 process.on('exit', (code) => {
   logger('exit %d', code);
 });
+process.on('uncaughtException', (err) => {
+  logger('uncaughtException - %O', err);
+  setTimeout(() => process.exit(1), 3000);
+});
+process.on('uncaughtExceptionMonitor', (err) => {
+  logger('uncaughtExceptionMonitor - %O', err);
+  setTimeout(() => process.exit(1), 3000);
+});
+process.on('unhandledRejection', (err) => {
+  logger('unhandledRejection - %O', err);
+  setTimeout(() => process.exit(1), 3000);
+});

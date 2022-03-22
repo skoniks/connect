@@ -50,7 +50,7 @@ export class Client {
       desc: 'close an application',
       action: async () => {
         await this.upnp.destroy();
-        process.exit(1);
+        setTimeout(() => process.exit(1), 3000);
       },
     },
   };
